@@ -646,8 +646,8 @@ _USER_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'   # no 0/O, 1/I
 
 
 def _client_ip(request):
-    forwarded = request.META.get('HTTP_X_FORWARDED_FOR', '')
-    return (forwarded.split(',')[0].strip() or request.META.get('REMOTE_ADDR', ''))[:64]
+    from myapp.ratelimit import client_ip
+    return client_ip(request)
 
 
 def _base_url(request):

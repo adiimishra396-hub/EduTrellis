@@ -1,12 +1,10 @@
-from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path, re_path, include
 from django.contrib.sitemaps.views import sitemap
 from django.views.generic import TemplateView, RedirectView
 
 from myapp.sitemaps import StaticViewSitemap, ProductSitemap, PolicySitemap
-from myapp.views import custom_404, favicon
+from myapp.views import custom_404, favicon, media_redirect
 from myapp.seo import llms_txt
 
 sitemaps = {
@@ -59,8 +57,8 @@ urlpatterns = [
     ),
 ]
 
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+# Uploaded files live in Dropbox; /media/<name> redirects to them.
+urlpatterns += [path('media/<path:name>', media_redirect, name='media_redirect')]
 
 # Catch-all: renders the custom 404 template for any unmatched URL. Django only
 # consults handler404 when DEBUG=False, so with DEBUG=True it would otherwise

@@ -3,10 +3,10 @@ import json
 from django.contrib.auth.models import User
 from django.http import HttpResponse
 from django.test import RequestFactory
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
-from .middleware import CanonicalHostMiddleware, PublicAssetCacheMiddleware
-from .models import Cart, Category, Product, PWASettings
+from .middleware import CanonicalHostMiddleware, PublicAssetCacheMiddleware, SiteSwitchMiddleware
+from .models import Cart, Category, Product, PWASettings, SiteStatus, StoredFile
 
 
 class PublicPagePerformanceAndSEOTests(TestCase):
@@ -122,10 +122,8 @@ class PublicPagePerformanceAndSEOTests(TestCase):
         middleware = PublicAssetCacheMiddleware(lambda request: HttpResponse('asset'))
 
         static_response = middleware(RequestFactory().get('/static/style.css'))
-        media_response = middleware(RequestFactory().get('/media/products/example.webp'))
 
         self.assertIn('max-age=86400', static_response['Cache-Control'])
-        self.assertIn('max-age=604800', media_response['Cache-Control'])
 
     def test_product_page_has_canonical_product_structured_data(self):
         category = Category.objects.create(name='SEO Test Audio', slug='seo-test-audio')
@@ -177,9 +175,104 @@ class FriendlyErrorPageTests(TestCase):
         self.assertContains(response, 'Page Not Found', status_code=404)
         self.assertNotContains(response, 'URLconf', status_code=404)
 
-    def test_staff_still_get_the_debug_page(self):
+    @override_settings(DEBUG=True)
+    def test_staff_get_the_debug_page_on_a_debug_server(self):
         staff = User.objects.create_user(username='dev@example.com', password='pw-123456789', is_staff=True)
         self.client.force_login(staff)
         self.client.raise_request_exception = True
         with self._crash(), self.assertRaises(RuntimeError):
             self.client.get('/store/')
+
+    def test_staff_get_the_friendly_page_in_production(self):
+        staff = User.objects.create_user(username='dev@example.com', password='pw-123456789', is_staff=True)
+        self.client.force_login(staff)
+        with self._crash():
+            response = self.client.get('/store/')
+        self.assertContains(response, 'Something went wrong', status_code=500)
+        self.assertNotContains(response, 'boom', status_code=500)
+
+
+class SiteSwitchTests(TestCase):
+    def setUp(self):
+        SiteSwitchMiddleware.refresh()
+
+    def tearDown(self):
+        SiteSwitchMiddleware.refresh()
+
+    def _switch(self, **flags):
+        SiteStatus.objects.update_or_create(pk=1, defaults=flags)
+        SiteSwitchMiddleware.refresh()
+
+    def test_disabled_ai_shows_coming_soon_at_its_own_address(self):
+        self._switch(ai_disabled=True, educhats_disabled=False)
+        response = self.client.get('/ai/')
+        self.assertEqual(response.status_code, 503)
+        self.assertContains(response, 'Coming soon', status_code=503)
+        self.assertContains(response, 'EduTrellis AI', status_code=503)
+        self.assertEqual(response['Retry-After'], '3600')
+        self.assertEqual(response.request['PATH_INFO'], '/ai/')
+
+    def test_disabled_ai_api_gets_json(self):
+        self._switch(ai_disabled=True, educhats_disabled=False)
+        response = self.client.post('/ai/api/chat/', data='{}', content_type='application/json')
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()['status'], 'error')
+
+    def test_disabled_educhats_covers_every_educhats_address(self):
+        self._switch(ai_disabled=False, educhats_disabled=True)
+        for path in ('/educhats/', '/educhats/api/me/', '/chats/', '/chat', '/ai/chats/'):
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 503, path)
+
+    def test_rest_of_site_stays_up(self):
+        self._switch(ai_disabled=True, educhats_disabled=True)
+        self.assertEqual(self.client.get('/store/').status_code, 200)
+        self.assertNotEqual(self.client.get('/aiml-course/').status_code, 503)
+
+    def test_dashboard_page_switches_products(self):
+        staff = User.objects.create_user(username='admin@example.com', password='pw-123456789', is_staff=True)
+        self.client.force_login(staff)
+        self._switch(ai_disabled=False, educhats_disabled=False)
+        response = self.client.post('/store/dashboard/site-status/', {'educhats_disabled': 'on'})
+        self.assertContains(response, 'Saved.')
+        self.assertTrue(SiteStatus.get_solo().educhats_disabled)
+        self.assertFalse(SiteStatus.get_solo().ai_disabled)
+        self.assertEqual(self.client.get('/educhats/').status_code, 503)
+
+    def test_dashboard_page_is_staff_only(self):
+        response = self.client.post('/store/dashboard/site-status/', {'ai_disabled': 'on'})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(SiteStatus.objects.filter(ai_disabled=True).exists())
+
+
+class MediaRedirectTests(TestCase):
+    def test_redirects_to_dropbox(self):
+        from unittest import mock
+        with mock.patch('myapp.dropbox_storage.temporary_link', return_value='https://dl.dropboxusercontent.com/x.jpg'):
+            response = self.client.get('/media/products/x.jpg')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], 'https://dl.dropboxusercontent.com/x.jpg')
+        self.assertIn('max-age=3600', response['Cache-Control'])
+
+    def test_permanent_link_is_used_when_stored(self):
+        StoredFile.objects.create(name='hero/a.jpg', url='https://www.dropbox.com/scl/fi/a/a.jpg?rlkey=k&raw=1')
+        from myapp import dropbox_storage
+        dropbox_storage._urls.pop('hero/a.jpg', None)
+        response = self.client.get('/media/hero/a.jpg')
+        self.assertEqual(response['Location'], 'https://www.dropbox.com/scl/fi/a/a.jpg?rlkey=k&raw=1')
+
+    def test_private_chat_files_are_never_handed_out(self):
+        from unittest import mock
+        with mock.patch('myapp.dropbox_storage.temporary_link') as link:
+            for path in ('/media/educhats/dm/2026/10/a.jpg', '/media/support_chat/users/a.jpg', '/media/ai_calls/1/2.webm'):
+                self.assertEqual(self.client.get(path).status_code, 404, path)
+        link.assert_not_called()
+
+    def test_path_tricks_are_refused(self):
+        self.assertEqual(self.client.get('/media/../db.sqlite3').status_code, 404)
+        self.assertEqual(self.client.get('/media/products/%2e%2e/%2e%2e/db.sqlite3').status_code, 404)
+
+    def test_missing_file_is_404(self):
+        from unittest import mock
+        with mock.patch('myapp.dropbox_storage.temporary_link', side_effect=FileNotFoundError):
+            self.assertEqual(self.client.get('/media/products/none.jpg').status_code, 404)

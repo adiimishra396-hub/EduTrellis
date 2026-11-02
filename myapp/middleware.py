@@ -1,6 +1,9 @@
 import logging
+import re
+import time
 
-from django.http import HttpResponsePermanentRedirect
+from django.http import HttpResponsePermanentRedirect, JsonResponse
+from django.shortcuts import render
 
 
 class CanonicalHostMiddleware:
@@ -35,6 +38,29 @@ class HideAdminFromNonStaffMiddleware:
         return self.get_response(request)
 
 
+class AdminLoginBrakeMiddleware:
+    """Too many wrong passwords on /admin/login/ (from one IP address or for
+    one account) pause admin logins for 15 minutes — see myapp.ratelimit."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.method != 'POST' or request.path != '/admin/login/':
+            return self.get_response(request)
+        from django.http import HttpResponse
+        from . import ratelimit
+        account = request.POST.get('username', '')
+        if ratelimit.login_blocked(request, account):
+            return HttpResponse(ratelimit.LOGIN_BLOCKED_MESSAGE, status=429, content_type='text/plain')
+        response = self.get_response(request)
+        if response.status_code == 302:   # the admin login redirects only on success
+            ratelimit.login_succeeded(request, account)
+        else:
+            ratelimit.login_failed(request, account)
+        return response
+
+
 class PublicAssetCacheMiddleware:
     """Give version-stable static/media files a useful browser cache.
 
@@ -50,15 +76,74 @@ class PublicAssetCacheMiddleware:
         if response.status_code == 200:
             if request.path.startswith('/static/'):
                 response['Cache-Control'] = 'public, max-age=86400, stale-while-revalidate=604800'
-            elif request.path.startswith((
-                '/media/products/', '/media/categories/', '/media/about/', '/media/pwa/',
-            )):
-                response['Cache-Control'] = 'public, max-age=604800, stale-while-revalidate=2592000'
+        return response
+
+
+class SiteSwitchMiddleware:
+    """Dashboard → Disable Site. A switched-off product answers every one of
+    its URLs with a "Coming soon" page (503, so search engines come back
+    later) — at the address the visitor typed, no redirect. API calls get a
+    short JSON error instead. Runs before sessions and login, so a switched-
+    off product costs one cached flag check per request and nothing else."""
+
+    AI_PATH = re.compile(r'^/ai(/|$)')
+    EDUCHATS_PATH = re.compile(r'^/(educhats|chats?)(/|$)')
+    CACHE_SECONDS = 5
+
+    _flags = (0.0, (False, False))
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    @classmethod
+    def flags(cls):
+        stamp, flags = cls._flags
+        if time.monotonic() - stamp > cls.CACHE_SECONDS:
+            from .models import SiteStatus
+            try:
+                row = SiteStatus.objects.filter(pk=1).values_list('ai_disabled', 'educhats_disabled').first()
+            except Exception:
+                row = None   # e.g. before migrate has run: keep everything on
+            flags = tuple(row) if row else (False, False)
+            cls._flags = (time.monotonic(), flags)
+        return flags
+
+    @classmethod
+    def refresh(cls):
+        cls._flags = (0.0, (False, False))
+
+    def __call__(self, request):
+        path = request.path
+        product = None
+        if self.AI_PATH.match(path) and not path.startswith('/ai/chats'):
+            product = 'ai'
+        elif self.EDUCHATS_PATH.match(path) or path.startswith('/ai/chats'):
+            product = 'educhats'
+        if product:
+            ai_off, educhats_off = self.flags()
+            if (ai_off if product == 'ai' else educhats_off):
+                return self.coming_soon(request, product)
+        return self.get_response(request)
+
+    @staticmethod
+    def coming_soon(request, product):
+        name = 'EduTrellis AI' if product == 'ai' else 'EduChats'
+        wants_json = ('/api/' in request.path or request.method not in ('GET', 'HEAD')
+                      or 'application/json' in request.headers.get('Accept', ''))
+        if wants_json:
+            detail = f'{name} is coming soon. Please check back later.'
+            response = JsonResponse({'ok': False, 'status': 'error', 'error': detail, 'detail': detail}, status=503)
+        else:
+            response = render(request, 'coming_soon.html', {'product_name': name, 'product': product}, status=503)
+        response['Retry-After'] = '3600'
+        response['Cache-Control'] = 'no-store'
+        response['X-Robots-Tag'] = 'noindex'
+        response._has_been_logged = True   # expected, not an error worth a log line per visit
         return response
 
 
 class FriendlyErrorPageMiddleware:
-    """DEBUG stays on (settings.py), but only staff see Django's yellow
+    """Where DEBUG is on (this computer), only staff see Django's yellow
     debug page with the code and traceback. Everyone else gets the site's
     own pages: "Something went wrong" (500.html) when a view crashes, and
     the normal 404 page for a missing product/page — or a short JSON error
@@ -75,9 +160,10 @@ class FriendlyErrorPageMiddleware:
         from django.http import Http404, JsonResponse
         from django.shortcuts import render
 
+        from django.conf import settings
         user = getattr(request, 'user', None)
-        if getattr(user, 'is_staff', False):
-            return None   # staff: Django's full debug page
+        if settings.DEBUG and getattr(user, 'is_staff', False):
+            return None   # staff on a debug server: Django's full debug page
         if isinstance(exception, (PermissionDenied, SuspiciousOperation, BadRequest)):
             return None   # Django already answers these with a plain 403/400
         wants_json = '/api/' in request.path or 'application/json' in request.headers.get('Accept', '') \

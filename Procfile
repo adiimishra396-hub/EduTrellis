@@ -1,1 +1,1 @@
-web: python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn edutrellis.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 4 --worker-class gthread --timeout 120
+web: python manage.py migrate --noinput && python manage.py collectstatic --noinput && (python manage.py move_media_to_dropbox -v 0 &) && gunicorn edutrellis.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 4 --worker-class gthread --timeout 120

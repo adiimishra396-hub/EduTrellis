@@ -26,7 +26,6 @@ BACKUP_ROOT = '/EduTrellis Store'
 BACKUP_FOLDER = f'{BACKUP_ROOT}/backups'
 LATEST_NAME = 'db_latest.sqlite3'
 ASSETS_LATEST_NAME = 'customize_latest.zip'
-ASSET_FOLDERS = ('customize', 'pwa')
 
 
 class BackupError(Exception):
@@ -57,22 +56,6 @@ def _ensure_folder(dbx, path):
             raise BackupError(f"Could not create the Dropbox folder '{path}': {exc}")
 
 
-def _customization_archive():
-    """Returns a ZIP containing uploaded customization and PWA images."""
-    media_root = Path(dj_settings.MEDIA_ROOT).resolve()
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, mode='w', compression=zipfile.ZIP_DEFLATED) as archive:
-        for folder_name in ASSET_FOLDERS:
-            folder = (media_root / folder_name).resolve()
-            if not folder.is_dir() or media_root not in folder.parents:
-                continue
-            for path in folder.rglob('*'):
-                resolved = path.resolve()
-                if path.is_file() and media_root in resolved.parents:
-                    archive.write(resolved, resolved.relative_to(media_root).as_posix())
-    return output.getvalue()
-
-
 def _asset_backup_name(database_filename):
     if database_filename == LATEST_NAME:
         return ASSETS_LATEST_NAME
@@ -93,26 +76,25 @@ def _download_optional(dbx, path):
 
 
 def _restore_customization_archive(content):
-    """Safely restores archived media files without deleting unrelated media."""
+    """Older backups carry a zip of the customization/PWA images. Images now
+    live in Dropbox, so any of them that are missing there are put back."""
     if content is None:
         return False
-    media_root = Path(dj_settings.MEDIA_ROOT).resolve()
+    from django.core.files.base import ContentFile
+    from . import dropbox_storage
     try:
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             for item in archive.infolist():
                 if item.is_dir():
                     continue
-                target = (media_root / item.filename).resolve()
-                if media_root not in target.parents:
+                if not dropbox_storage.is_safe_name(item.filename):
                     raise BackupError('Customization backup contains an unsafe file path.')
-                target.parent.mkdir(parents=True, exist_ok=True)
-                temporary = target.with_suffix(target.suffix + '.restoring')
-                temporary.write_bytes(archive.read(item))
-                temporary.replace(target)
+                if not dropbox_storage.DropboxStorage().exists(item.filename):
+                    dropbox_storage.store_existing(item.filename, archive.read(item))
         return True
     except BackupError:
         raise
-    except (OSError, zipfile.BadZipFile) as exc:
+    except Exception as exc:
         raise BackupError(f'Could not restore customization images: {exc}')
 
 
@@ -241,22 +223,19 @@ def _upload_backup(dbx, suffix='', refresh_latest=True):
     _ensure_folder(dbx, BACKUP_ROOT)
     _ensure_folder(dbx, BACKUP_FOLDER)
     data = _snapshot_database()
-    asset_data = _customization_archive()
     stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S') + suffix
     filename = f'db_{stamp}.sqlite3'
-    # The images go up first: the database file is what makes a backup show in
-    # the list, so a backup that's listed always has its images with it.
-    _upload(dbx, asset_data, f'{BACKUP_FOLDER}/customize_{stamp}.zip')
+    # Uploaded images already live in Dropbox ('/EduTrellis Site', see
+    # dropbox_storage), so a backup is just the database.
     _upload(dbx, data, f'{BACKUP_FOLDER}/{filename}')
     if refresh_latest:
-        _upload(dbx, asset_data, f'{BACKUP_FOLDER}/{ASSETS_LATEST_NAME}', overwrite=True)
         _upload(dbx, data, f'{BACKUP_FOLDER}/{LATEST_NAME}', overwrite=True)
     return filename
 
 
 @_one_at_a_time
 def create_backup(settings_obj):
-    """Uploads paired database and customization-image backups."""
+    """Uploads a database backup."""
     try:
         return _upload_backup(_client(settings_obj))
     except BackupError:
@@ -359,7 +338,8 @@ def _migrate():
 
 @_one_at_a_time
 def restore_backup(settings_obj, filename):
-    """Restores the database and its paired customization-image archive.
+    """Restores the database (and, for older backups, any customization images
+    in its paired archive that are missing from Dropbox).
 
     Safe order: download → check the file is a healthy EduTrellis database →
     save the current data to Dropbox as db_<now>_before_restore → swap the

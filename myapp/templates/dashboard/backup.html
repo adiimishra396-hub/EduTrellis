@@ -49,7 +49,7 @@
 {% endblock %}
 
 {% block content %}
-<p class="backup-sub">Back up or restore the SQLite database together with uploaded Customize/PWA images.</p>
+<p class="backup-sub">Back up or restore the SQLite database. Uploaded images and files are stored in Dropbox (<code>/EduTrellis Site</code>) as they are uploaded, so they are always kept.</p>
 
 {% for message in messages %}
   <div class="flash {{ message.tags }}"><i class="fas {% if message.tags == 'error' %}fa-circle-exclamation{% else %}fa-circle-check{% endif %}"></i> {{ message }}</div>
@@ -74,7 +74,7 @@
       <ul class="backup-facts">
         <li><i class="fas fa-folder"></i> Saves a timestamped copy to <code>{{ backup_folder }}/</code></li>
         <li><i class="fas fa-file-circle-check"></i> Also refreshes <code>{{ backup_folder }}/db_latest.sqlite3</code></li>
-        <li><i class="fas fa-images"></i> Saves a matching <code>customize_*.zip</code> containing share, favicon and PWA images</li>
+        <li><i class="fas fa-images"></i> Images are already safe in Dropbox under <code>/EduTrellis Site</code></li>
         <li><i class="fas fa-shield-halved"></i> Each copy is checked for damage before and after upload; old backups are kept</li>
       </ul>
       <form method="post" action="{% url 'dashboard_backup_run' %}" class="busy-form" data-busy="Backing up…">
@@ -166,7 +166,7 @@
       <p>This permanently removes <b>all {{ backups|length }} backup{{ backups|length|pluralize }}</b> from <code>{{ backup_folder }}/</code> on Dropbox:</p>
       <ul>
         <li>every timestamped database copy (<code>db_*.sqlite3</code>)</li>
-        <li>their image archives (<code>customize_*.zip</code>)</li>
+        <li>image archives from older backups (<code>customize_*.zip</code>)</li>
         <li>the <code>db_latest</code> and <code>customize_latest</code> copies</li>
       </ul>
       <p>You won't be able to restore from them here afterwards. Your live database isn't touched. Dropbox may keep deleted files in its own "Deleted files" for a while.</p>

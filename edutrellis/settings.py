@@ -16,14 +16,25 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Railway volume (web service → Volumes, mounted at /media): the database lives
+# on it so a redeploy doesn't wipe it — see edutrellis/volume.py. Without the
+# volume (this computer) it stays in the project folder.
+VOLUME_DIR = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', '').strip()
+ON_RAILWAY = bool(VOLUME_DIR or os.environ.get('RAILWAY_ENVIRONMENT'))
+TESTING = 'test' in sys.argv or os.path.basename(sys.argv[0] if sys.argv else '').startswith(('pytest', 'py.test'))
+
 SECRET_KEY = os.environ.get(
     'DJANGO_SECRET_KEY',
     'django-insecure-2!^^*c(t)whrn^4w3xkoqx!1p85e5s!-xh0w+xai7&q*80tt@@'
 )
 
-DEBUG = True
+# Off in production: a debug page shows settings and code to whoever triggers
+# an error. On this computer it stays on. DJANGO_DEBUG=1 / 0 overrides either.
+DEBUG = os.environ.get('DJANGO_DEBUG', '0' if ON_RAILWAY else '1') == '1'
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['www.edutrellis.in', 'edutrellis.in', '.up.railway.app', 'localhost', '127.0.0.1', '[::1]', 'testserver']
+ALLOWED_HOSTS += [h.strip() for h in os.environ.get('RAILWAY_PUBLIC_DOMAIN', '').split(',') if h.strip()]
+ALLOWED_HOSTS += [h.strip() for h in os.environ.get('DJANGO_ALLOWED_HOSTS', '').split(',') if h.strip()]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -41,7 +52,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'myapp.middleware.CanonicalHostMiddleware',
-    'ai_app.middleware.AISiteDisabledMiddleware',
+    'myapp.middleware.SiteSwitchMiddleware',
     'ai_app.middleware.AICustomModelsMiddleware',
     'myapp.middleware.PublicAssetCacheMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -51,6 +62,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'ai_app.middleware.AISingleDeviceSessionMiddleware',
     'myapp.middleware.HideAdminFromNonStaffMiddleware',
+    'myapp.middleware.AdminLoginBrakeMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     # DEBUG stays on, but visitors see "Something went wrong" instead of the
@@ -81,16 +93,17 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'edutrellis.wsgi.application'
 
-# Railway volume (web service → Volumes, mounted at /media): the database and uploaded
-# files live on it so a redeploy doesn't wipe them — see edutrellis/volume.py.
-# Without the volume (this computer) they stay in the project folder as before.
-VOLUME_DIR = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH', '').strip()
 if VOLUME_DIR:
     DATABASE_FILE = Path(VOLUME_DIR) / 'data' / 'db.sqlite3'
-    MEDIA_ROOT = Path(VOLUME_DIR) / 'uploads'
+    # Where uploads lived before they moved to Dropbox. move_media_to_dropbox
+    # uploads whatever is left there and deletes it.
+    LEGACY_MEDIA_ROOT = Path(VOLUME_DIR) / 'uploads'
+    # Call recordings and temporary YouTube downloads: never public, never served as /media/.
+    PRIVATE_FILES_ROOT = Path(VOLUME_DIR) / 'private'
 else:
     DATABASE_FILE = BASE_DIR / 'db.sqlite3'
-    MEDIA_ROOT = BASE_DIR / 'media'
+    LEGACY_MEDIA_ROOT = BASE_DIR / 'media'
+    PRIVATE_FILES_ROOT = BASE_DIR / 'private_files'
 
 DATABASES = {
     'default': {
@@ -118,12 +131,23 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'myapp' / 'static']
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+# Every upload goes to Dropbox (myapp.dropbox_storage), under this folder.
+# Tests use memory instead, so they never touch the real Dropbox account.
+STORAGES = {
+    'default': {'BACKEND': 'myapp.dropbox_storage.DropboxStorage'},
+    # Gzip/Brotli copies of every static file, served by WhiteNoise.
+    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage'},
+}
+DROPBOX_MEDIA_ROOT = '/EduTrellis Site'
+DROPBOX_STORAGE_ENABLED = not TESTING
+if TESTING:
+    STORAGES['default'] = {'BACKEND': 'django.core.files.storage.InMemoryStorage'}
 
+# /media/<name> redirects to the file in Dropbox (myapp.views.media_redirect).
 MEDIA_URL = '/media/'
-if VOLUME_DIR:   # first start on an empty volume: move the database and files onto it
+if VOLUME_DIR:   # first start on an empty volume: move the database onto it
     from .volume import prepare as _prepare_volume
-    _prepare_volume(BASE_DIR, DATABASE_FILE, MEDIA_ROOT)
+    _prepare_volume(BASE_DIR, DATABASE_FILE)
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 
@@ -140,10 +164,15 @@ SESSION_SAVE_EVERY_REQUEST = True
 SECURE_SSL_REDIRECT = not DEBUG
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_BROWSER_XSS_FILTER = True
+# Browsers remember to use HTTPS only for 30 days; subdomains aren't included.
+SECURE_HSTS_SECONDS = 0 if DEBUG else 60 * 60 * 24 * 30
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 X_FRAME_OPTIONS = 'DENY'
 SECURE_CONTENT_TYPE_NOSNIFF = True
+CSRF_TRUSTED_ORIGINS = ['https://www.edutrellis.in', 'https://edutrellis.in']
 
 
 
@@ -268,10 +297,10 @@ if not NVIDIA_FLUX_DEV_API_KEY and _flux_dev_key_file.is_file():
 # Tavily powers optional live web search from the AI chat composer.
 TAVILY_API_KEY = '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'
 
-# ── Dropbox archive for AI-generated images ──────────────────────────────────
-# Every image the AI generates is mirrored to Dropbox (ai_app/dropbox_images.py),
-# because local media storage is wiped on every redeploy. Uploading happens
-# on a background thread, so this adds nothing to image reply times.
+# ── Dropbox ──────────────────────────────────────────────────────────────────
+# One Dropbox account holds every uploaded file ('/EduTrellis Site', see
+# STORAGES above and myapp/dropbox_storage.py), the database backups
+# ('/EduTrellis Store') and AI bug-report evidence (ai_app/dropbox_images.py).
 #
 # Hardcoded at the project owner's explicit request, like the keys above —
 # which means a refresh token with full access to that Dropbox account is
@@ -291,10 +320,7 @@ DROPBOX_REFRESH_TOKEN = 'Si57f7yXuB0AAAAAAAAAAZGrsYbd1YLQpvGHxlJES4DRvKr7mDfZo8x
 # `manage.py test` uploads the suite's fake images into the live account.
 # Tests that mean to cover archiving turn it back on with override_settings
 # and patch the client, so they never touch the network.
-DROPBOX_IMAGE_ARCHIVE_ENABLED = not (
-    'test' in sys.argv
-    or os.path.basename(sys.argv[0] if sys.argv else '').startswith(('pytest', 'py.test'))
-)
+DROPBOX_IMAGE_ARCHIVE_ENABLED = not TESTING
 # Long messages and long chats are shortened before they reach the chat model
 # (ai_app.context_compress). Off under tests so no test calls the real model.
 AI_CONTEXT_COMPRESSION_ENABLED = DROPBOX_IMAGE_ARCHIVE_ENABLED
@@ -317,6 +343,12 @@ LOGGING = {
         'console': {'class': 'logging.StreamHandler'},
     },
     'loggers': {
+        # With DEBUG off Django would only email crashes (to nobody); print them.
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
         'myapp': {
             'handlers': ['console'],
             'level': 'INFO',

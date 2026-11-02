@@ -27,18 +27,21 @@ from myapp.forms import (
     ProductForm, ProductImageFormSet, ProductColorFormSet,
     AboutUsContentForm, PolicyPageForm, PaymentSettingsForm, DropboxSettingsForm, PWASettingsForm,
     FeeSettingsForm, AddUserForm, NavAISettingsForm, FounderSectionForm, HeroSlideImageFormSet,
-    BlogSettingsForm, BlogGalleryItemFormSet, ProductCardFormSet,
+    BlogSettingsForm, BlogGalleryItemFormSet, ProductCardFormSet, SiteStatusForm,
 )
 from myapp.models import (
     ContactLead, StoreProfile, Cart, CartItem, Category, Order, OrderItem,
     Product, ProductImage, ProductColor, AboutUsContent, PolicyPage, PaymentSettings, Payment,
     DropboxSettings, Review, PhoneVerification, PWASettings, FeeSettings, NavAISettings, FounderSection,
-    HeroSlideImage, BlogSettings, BlogGalleryItem, ProductCard,
+    HeroSlideImage, BlogSettings, BlogGalleryItem, ProductCard, SiteStatus,
 )
-from myapp import dropbox_backup
+from myapp import dropbox_backup, dropbox_storage
+from myapp.middleware import SiteSwitchMiddleware
 from myapp.emailing import send_store_email, get_notify_email
 from myapp.sms import send_phone_otp, verify_phone_otp
 from myapp.seed_data import seed_demo_reviews
+from myapp.seo import to_script_json
+from myapp import ratelimit
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +120,7 @@ def home(request):
     return render(request, "home.html", {
         "contact_form": ContactLeadForm(),
         "trending_products": trending_products,
-        "nav_user_json": json.dumps(nav_user),
+        "nav_user_json": to_script_json(nav_user),
         "hero_slides": _hero_slides(),
         "blog_settings": BlogSettings.get_solo(),
         "blog_items": BlogGalleryItem.objects.all(),
@@ -332,8 +335,8 @@ def _estore_context(request):
     categories = Category.objects.filter(is_active=True)
     products = Product.objects.filter(is_active=True).select_related('category').prefetch_related('images', 'colors', 'reviews')
     return {
-        "store_boot_json": json.dumps(boot),
-        "products_json": json.dumps([_product_payload(p) for p in products]),
+        "store_boot_json": to_script_json(boot),
+        "products_json": to_script_json([_product_payload(p) for p in products]),
         "categories": categories,
         "about": AboutUsContent.get_solo(),
         "pwa": pwa_settings,
@@ -794,6 +797,8 @@ def store_login(request):
 
     identifier = form.cleaned_data['identifier'].strip()
     password = form.cleaned_data['password']
+    if ratelimit.login_blocked(request, identifier):
+        return JsonResponse({'status': 'error', 'detail': ratelimit.LOGIN_BLOCKED_MESSAGE}, status=429)
 
     user_obj = User.objects.filter(email__iexact=identifier).first()
     if not user_obj:
@@ -801,11 +806,14 @@ def store_login(request):
         user_obj = profile.user if profile else None
 
     if not user_obj:
+        ratelimit.login_failed(request, identifier)
         return JsonResponse({'status': 'error', 'detail': 'No account found with that email or phone.'}, status=400)
 
     auth_user = authenticate(request, username=user_obj.username, password=password)
     if not auth_user:
+        ratelimit.login_failed(request, identifier)
         return JsonResponse({'status': 'error', 'detail': 'Incorrect password.'}, status=400)
+    ratelimit.login_succeeded(request, identifier)
 
     if not request.session.session_key:
         request.session.create()
@@ -1244,6 +1252,29 @@ def favicon(request):
     from django.templatetags.static import static
     site = PWASettings.get_solo()
     return redirect(site.favicon.url if site.favicon else static('favicon.ico'))
+
+
+def media_redirect(request, name):
+    """/media/<name>: sends the browser to the file in Dropbox — its permanent
+    shared link when it has one, else a temporary download link. Chat files
+    and call recordings are never handed out here (see dropbox_storage.PRIVATE_PREFIXES)."""
+    if request.method not in ('GET', 'HEAD'):
+        return HttpResponse(status=405)
+    if not dropbox_storage.is_safe_name(name) or dropbox_storage.is_private(name):
+        return render(request, '404.html', status=404)
+    try:
+        link = dropbox_storage.permanent_link(name) or dropbox_storage.temporary_link(name)
+    except FileNotFoundError:
+        return render(request, '404.html', status=404)
+    except Exception:
+        logging.getLogger('myapp').exception('Could not get a Dropbox link for %s', name)
+        response = HttpResponse('This file is unavailable right now. Please try again shortly.',
+                                status=503, content_type='text/plain')
+        response['Retry-After'] = '60'
+        return response
+    response = redirect(link)
+    response['Cache-Control'] = f'public, max-age={dropbox_storage.REDIRECT_MAX_AGE}'
+    return response
 
 
 def custom_404(request, exception=None):
@@ -1781,6 +1812,23 @@ def dashboard_fee_settings(request):
         form = FeeSettingsForm(instance=settings_obj)
     return render(request, 'dashboard/fee_settings.html', {
         'active': 'fee_settings', 'form': form, 'settings_obj': settings_obj, 'saved': saved,
+    })
+
+
+@dashboard_staff_required
+def dashboard_site_status(request):
+    """Disable Site: switch EduTrellis AI and/or EduChats off. Visitors then see
+    a "Coming soon" page at the same address (myapp.middleware.SiteSwitchMiddleware)."""
+    settings_obj = SiteStatus.get_solo()
+    form = SiteStatusForm(request.POST or None, instance=settings_obj)
+    saved = False
+    if request.method == 'POST' and form.is_valid():
+        form.save()
+        SiteSwitchMiddleware.refresh()
+        saved = True
+        form = SiteStatusForm(instance=settings_obj)
+    return render(request, 'dashboard/site_status.html', {
+        'active': 'site_status', 'form': form, 'settings_obj': settings_obj, 'saved': saved,
     })
 
 

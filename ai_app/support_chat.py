@@ -24,6 +24,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
+from myapp.seo import to_script_json
 from .india_locations import INDIA_LOCATIONS
 from .educhats_social import save_socials, socials_json
 from .models import ChatMessage, ChatPasswordReset, ChatUser, MapSpot, SupportProfile
@@ -687,7 +688,7 @@ def chats_page(request):
         # locked: only the lock screen — no names, messages or pictures in the page
         response = render(request, 'chats_locked.html', {
             'chat_user': user, 'app': _app_settings(), 'has_keys': bool(user.app_lock_keys),
-            'key_ids': json.dumps([k['id'] for k in user.app_lock_keys or []]),
+            'key_ids': to_script_json([k['id'] for k in user.app_lock_keys or []]),
             'appearance_json': json.dumps(user.appearance if isinstance(user.appearance, dict) else {})
                                .replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026'),
         })
@@ -719,7 +720,7 @@ def chats_page(request):
         # dashboard login without the matching EduChats account: offer to switch to it
         'can_admin_login': bool(request.user.is_authenticated and request.user.is_active and request.user.is_superuser
                                 and not (user and user.django_user_id == request.user.pk)),
-        'app_lock': json.dumps(lock_status(request, user) if user and not user.is_guest else {'enabled': False}),
+        'app_lock': to_script_json(lock_status(request, user) if user and not user.is_guest else {'enabled': False}),
         'support_name_json': json.dumps(support.display_name).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026'),
         'locations': INDIA_LOCATIONS,
         'support_contact': _support_contact(support),

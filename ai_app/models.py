@@ -9,6 +9,8 @@ from django.db import models
 from django.db.models import F
 from django.utils import timezone
 
+from myapp.dropbox_storage import private_storage
+
 
 
 
@@ -405,11 +407,6 @@ class AISiteSettings(models.Model):
                    'browser — fixes "Sign in to confirm you\'re not a bot" download failures, which datacenter/'
                    'server IPs (like most hosting providers) hit far more than a home connection. Leave blank to '
                    'disable. Superadmin-only feature — see ai_app.youtube_download.',
-    )
-    site_disabled = models.BooleanField(
-        default=False,
-        help_text='Shows a bare "Not Available" page for every /ai/ URL instead of the real chat — the rest of '
-                   'the EduTrellis site (and the dashboard/admin) stays up. See ai_app.middleware.AISiteDisabledMiddleware.',
     )
     # A separate installable PWA from the storefront's own (myapp.PWASettings)
     # — /ai/ is a different app a phone can install ("Vidhyora AI"/"ChatGPT
@@ -872,7 +869,8 @@ class AICall(models.Model):
     duration_seconds = models.PositiveIntegerField(default=0)
     turn_count = models.PositiveIntegerField(default=0, help_text='How many things the caller said.')
     transcript = models.JSONField(default=list, blank=True)
-    audio = models.FileField(upload_to='ai_calls/', blank=True, max_length=200)
+    # Written in pieces while the call runs, so it stays on the server's private disk, not Dropbox.
+    audio = models.FileField(upload_to='ai_calls/', storage=private_storage, blank=True, max_length=200)
     audio_mime = models.CharField(max_length=60, blank=True)
     audio_bytes = models.PositiveBigIntegerField(default=0)
     audio_chunks = models.PositiveIntegerField(default=0)

@@ -29,7 +29,7 @@ def _run(job_id):
     job.status = YouTubeDownloadJob.STATUS_WORKING
     job.progress = 2
     job.save(update_fields=['status', 'progress'])
-    output_dir = Path(settings.MEDIA_ROOT) / 'ai_youtube'
+    output_dir = Path(settings.PRIVATE_FILES_ROOT) / 'ai_youtube'
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = str(job.token)
     cookie_path = None
@@ -128,8 +128,8 @@ def _run(job_id):
         YouTubeDownloadJob.objects.filter(pk=job_id).update(
             status=YouTubeDownloadJob.STATUS_READY, progress=100,
             title=(info.get('title') or 'YouTube download')[:300],
-            video_path=str(video_path.relative_to(settings.MEDIA_ROOT)) if video_path else '',
-            audio_path=str(audio_path.relative_to(settings.MEDIA_ROOT)) if audio_path else '',
+            video_path=str(video_path.relative_to(settings.PRIVATE_FILES_ROOT)) if video_path else '',
+            audio_path=str(audio_path.relative_to(settings.PRIVATE_FILES_ROOT)) if audio_path else '',
         )
     except Exception as exc:
         for path in output_dir.glob(f'{stem}.*'):

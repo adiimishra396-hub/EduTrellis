@@ -1,0 +1,43 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ product_name }} — Coming Soon</title>
+<meta name="robots" content="noindex, follow">
+<meta name="description" content="{{ product_name }} is coming soon. Check back later.">
+{% include "includes/favicon.html" %}
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800;900&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+:root{--red:#e8001e;--red-dark:#c0001a;--text:#555f6d;--head:#111418;--line:#e7eaf0;--bg-alt:#f8f9fc}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans',system-ui,sans-serif;color:var(--text);background:var(--bg-alt);line-height:1.75;min-height:100vh;display:flex;flex-direction:column}
+a{color:var(--red);text-decoration:none}
+header{background:#fff;border-bottom:1px solid var(--line);padding:1.1rem 1rem}
+.hd-wrap{max-width:760px;margin:0 auto}
+.logo-txt{font-family:'Sora',sans-serif;font-size:1.15rem;font-weight:900;letter-spacing:-.03em;color:var(--head)}
+.logo-txt span{color:var(--red)}
+main{flex:1;max-width:760px;width:100%;margin:0 auto;padding:4rem 1rem;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.badge{display:inline-grid;place-items:center;width:4.5rem;height:4.5rem;border-radius:1.25rem;background:#fff;border:1.5px solid var(--line);color:var(--red);font-size:1.9rem;box-shadow:0 12px 30px rgba(232,0,30,.12);margin-bottom:1.5rem}
+.eyebrow{font-family:'Sora',sans-serif;font-size:.78rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--red)}
+h1{font-family:'Sora',sans-serif;font-size:clamp(1.9rem,6vw,2.8rem);font-weight:900;color:var(--head);letter-spacing:-.03em;line-height:1.15;margin:.4rem 0 .9rem}
+p{font-size:1rem;max-width:30rem;margin-bottom:2rem}
+.btn-home{display:inline-flex;align-items:center;gap:.5rem;background:var(--red);color:#fff;font-weight:700;font-size:.92rem;padding:.8rem 1.6rem;border-radius:.5rem;transition:background .15s}
+.btn-home:hover{background:var(--red-dark)}
+footer{text-align:center;font-size:.8rem;padding:1.5rem 1rem;color:#8a93a1}
+</style>
+</head>
+<body>
+<header><div class="hd-wrap"><a href="/" class="logo-txt" aria-label="EduTrellis home">Edu<span>Trellis</span></a></div></header>
+<main>
+  <div class="badge" aria-hidden="true"><i class="fas {% if product == 'ai' %}fa-wand-magic-sparkles{% else %}fa-comments{% endif %}"></i></div>
+  <div class="eyebrow">{{ product_name }}</div>
+  <h1>Coming soon</h1>
+  <p>We're working on something better here. {{ product_name }} will be back shortly. Please check again later.</p>
+  <a class="btn-home" href="/"><i class="fas fa-house"></i> Go to EduTrellis</a>
+</main>
+<footer>&copy; EduTrellis</footer>
+</body>
+</html>

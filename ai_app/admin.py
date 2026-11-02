@@ -123,7 +123,7 @@ class GitHubConnectionAdmin(admin.ModelAdmin):
 
 @admin.register(AISiteSettings)
 class AISiteSettingsAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'ai_brand_name', 'site_disabled', 'updated_at')
+    list_display = ('__str__', 'ai_brand_name', 'updated_at')
 
     def has_add_permission(self, request):
         return not AISiteSettings.objects.exists()

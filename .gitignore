@@ -12,3 +12,6 @@ media/ai_youtube/
 db.sqlite3
 
 
+
+# Call recordings and temporary downloads (never public)
+private_files/

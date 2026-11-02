@@ -22,10 +22,10 @@ from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 
 from django.core.cache import cache
-from django.core.files.storage import default_storage
 from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.utils import timezone
 
+from myapp.dropbox_storage import private_storage
 from . import ai_chat, chat_export, file_convert
 
 logger = logging.getLogger(__name__)
@@ -197,7 +197,7 @@ def upload_audio(request, pk):
 
     name = call.audio.name or f'ai_calls/{call.user_id}/{call.pk}.{extension}'
     try:
-        target = Path(default_storage.path(name))
+        target = Path(private_storage().path(name))
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, 'ab') as handle:
             for part in chunk.chunks():
@@ -347,7 +347,7 @@ def audio_response(request, call):
     if not call or not call.audio or not call.audio_bytes:
         return _error('There is no recording for this call.', 404)
     try:
-        path = default_storage.path(call.audio.name)
+        path = private_storage().path(call.audio.name)
         size = os.path.getsize(path)
     except (NotImplementedError, OSError):
         return _error('The recording file is no longer available.', 404)
@@ -394,7 +394,7 @@ def recording(request, pk):
 def _remove_audio(call):
     if call.audio:
         try:
-            default_storage.delete(call.audio.name)
+            private_storage().delete(call.audio.name)
         except Exception:
             logger.warning('Could not delete call recording %s', call.audio.name)
 

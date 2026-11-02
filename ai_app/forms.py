@@ -243,7 +243,7 @@ class AISiteSettingsForm(forms.ModelForm):
         fields = [
             'favicon', 'ai_brand_name', 'social_preview_title', 'social_preview_description',
             'social_preview_image', 'support_whatsapp_number', 'support_email',
-            'youtube_cookies_txt', 'site_disabled',
+            'youtube_cookies_txt',
             'pwa_enabled', 'pwa_app_name', 'pwa_short_name', 'pwa_description',
             'pwa_icon', 'pwa_theme_color', 'pwa_background_color',
         ]

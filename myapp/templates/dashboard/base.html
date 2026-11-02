@@ -229,6 +229,7 @@ tbody tr:hover{background:var(--bg-alt)}
         </div>
       </details>
       <a href="{% url 'dashboard_backup' %}" class="{% if active == 'backup' %}active{% endif %}"><i class="fas fa-database"></i> Backup &amp; Restore</a>
+      <a href="{% url 'dashboard_site_status' %}" class="{% if active == 'site_status' %}active{% endif %}" title="Switch EduTrellis AI or EduChats off for visitors"><i class="fas fa-power-off"></i> Disable Site</a>
       <details class="dash-nav-group{% if active == 'customize' or active == 'about' or active == 'founder_settings' or active == 'policies' or active == 'nav_ai_settings' or active == 'banner_settings' or active == 'blog_settings' or active == 'products_settings' %} has-active{% endif %}" {% if active == 'customize' or active == 'about' or active == 'founder_settings' or active == 'policies' or active == 'nav_ai_settings' or active == 'banner_settings' or active == 'blog_settings' or active == 'products_settings' %}open{% endif %}>
         <summary><i class="fas fa-palette"></i> Customize <i class="fas fa-chevron-down chev"></i></summary>
         <div class="dash-nav-sub">

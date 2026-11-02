@@ -1020,3 +1020,42 @@ class Review(models.Model):
     def __str__(self):
         return f"{self.user.username} → {self.product.name} ({self.rating}★)"
 
+
+
+class StoredFile(models.Model):
+    """One uploaded file that lives in Dropbox (see myapp.dropbox_storage).
+    `name` is what the model's FileField holds; `url` is the file's permanent
+    Dropbox shared link, blank until the Dropbox app is allowed to create one
+    (the site then serves it through /media/<name> instead)."""
+    name       = models.CharField(max_length=255, unique=True)
+    url        = models.URLField(max_length=600, blank=True, db_index=True)
+    size       = models.PositiveBigIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Stored file'
+        verbose_name_plural = 'Stored files'
+
+    def __str__(self):
+        return self.name
+
+
+class SiteStatus(models.Model):
+    """Dashboard → Disable Site: switches whole products off. A switched-off
+    product shows a "Coming soon" page at its own URL (myapp.middleware.
+    SiteSwitchMiddleware); the storefront, dashboard and /admin/ stay up."""
+    ai_disabled       = models.BooleanField(default=False, help_text='Every /ai/ page shows "Coming soon" instead of the AI chat.')
+    educhats_disabled = models.BooleanField(default=False, help_text='Every /educhats/ page shows "Coming soon" instead of EduChats.')
+    updated_at        = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Site status'
+        verbose_name_plural = 'Site status'
+
+    def __str__(self):
+        return 'Site status'
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj

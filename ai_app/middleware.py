@@ -1,6 +1,5 @@
 from django.contrib.auth import logout
 from django.contrib.sessions.models import Session
-from django.shortcuts import render
 from django.utils import timezone
 
 from .models import ActiveUserSession
@@ -48,28 +47,6 @@ class AISingleDeviceSessionMiddleware:
                     # authenticated session reclaim it.
                     register_active_session(request.user, current_key)
 
-        return self.get_response(request)
-
-
-class AISiteDisabledMiddleware:
-    """AI Settings' "Disable AI" checkbox (see AISiteSettings.site_disabled)
-    — every visitor to /ai/ gets a bare "Not Available" page instead of the
-    real chat. The rest of the EduTrellis site, plus the dashboard/admin/
-    static/media, are completely unaffected."""
-
-    def __init__(self, get_response):
-        self.get_response = get_response
-
-    def __call__(self, request):
-        if not request.path.startswith('/ai/'):
-            return self.get_response(request)
-        from .models import AISiteSettings
-        try:
-            disabled = AISiteSettings.get_solo().site_disabled
-        except Exception:
-            disabled = False
-        if disabled:
-            return render(request, 'ai_site_disabled.html', status=404)
         return self.get_response(request)
 
 

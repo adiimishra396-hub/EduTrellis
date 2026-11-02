@@ -5,7 +5,7 @@ from django.utils.text import slugify
 from myapp.models import (
     Category, Order, Product, ProductImage, ProductColor, StoreProfile,
     AboutUsContent, PolicyPage, PaymentSettings, DropboxSettings, EmailSettings, PWASettings, FeeSettings,
-    NavAISettings, FounderSection, HeroSlideImage, BlogSettings, BlogGalleryItem, ProductCard,
+    NavAISettings, FounderSection, HeroSlideImage, BlogSettings, BlogGalleryItem, ProductCard, SiteStatus,
 )
 
 
@@ -535,3 +535,9 @@ class EmailSettingsForm(forms.ModelForm):
             'is_enabled', 'smtp_host', 'smtp_port', 'smtp_username', 'smtp_password',
             'use_tls', 'use_ssl', 'from_email', 'notify_email',
         ]
+
+
+class SiteStatusForm(forms.ModelForm):
+    class Meta:
+        model = SiteStatus
+        fields = ['ai_disabled', 'educhats_disabled']

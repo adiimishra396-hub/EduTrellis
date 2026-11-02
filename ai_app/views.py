@@ -44,6 +44,8 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 from .forms import PhoneVerifyForm, AILoginForm, AIProfileEditForm, AIPasswordChangeForm, GrantAISubscriptionForm, GrantAPIAccessForm, MAX_AMOUNT_PAID, AISiteSettingsForm, AIAddUserForm
 from .models import AISiteSettings, AIAccountMessageSettings, AIConversation, AIMessage, AIBlock, AINote, AIReport, AIGeneratedFile, AIUserImage, GitHubConnection, YouTubeDownloadJob, AIAPIAccess, AIAPIKey, ProviderAPICredential, AIVideoJob
 from myapp.models import StoreProfile, PhoneVerification
+from myapp import dropbox_storage
+from myapp import ratelimit
 from . import dropbox_images
 from . import ai_chat
 from . import context_compress
@@ -310,6 +312,8 @@ def ai_login(request):
 
     identifier = form.cleaned_data['identifier'].strip()
     password = form.cleaned_data['password']
+    if ratelimit.login_blocked(request, identifier):
+        return JsonResponse({'status': 'error', 'detail': ratelimit.LOGIN_BLOCKED_MESSAGE}, status=429)
 
     user_obj = User.objects.filter(email__iexact=identifier).first()
     if not user_obj:
@@ -317,11 +321,14 @@ def ai_login(request):
         user_obj = profile.user if profile else None
 
     if not user_obj:
+        ratelimit.login_failed(request, identifier)
         return JsonResponse({'status': 'error', 'detail': 'No account found with that email or phone.'}, status=400)
 
     auth_user = authenticate(request, username=user_obj.username, password=password)
     if not auth_user:
+        ratelimit.login_failed(request, identifier)
         return JsonResponse({'status': 'error', 'detail': 'Incorrect password.'}, status=400)
+    ratelimit.login_succeeded(request, identifier)
 
     if not request.session.session_key:
         request.session.create()
@@ -2583,8 +2590,7 @@ def ai_page(request):
 
 
 def _client_ip(request):
-    forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
-    return forwarded.split(',')[0].strip() if forwarded else request.META.get('REMOTE_ADDR', 'unknown')
+    return ratelimit.client_ip(request)
 
 
 def _format_wait_time(seconds):
@@ -3416,15 +3422,6 @@ def _ai_flux_response(conversation, prompt, source_image, response_model_key=Non
 
     model_controls.record_success(ai_chat.FLUX_KLEIN_4B_MODEL_KEY)
 
-    # Mirror the image into the owner's Dropbox archive, because local media
-    # storage does not survive a redeploy. Placed after the try/except above
-    # so it can never be mistaken for a generation failure, and enqueue() only
-    # hands the bytes to a background thread — no network happens here, so
-    # this costs the reply nothing measurable.
-    dropbox_images.enqueue(
-        generated.content, generated.extension, owner_email, local_name=stored_name,
-    )
-
     # No caption text — the image speaks for itself, and a canned "Image
     # generated successfully." heading above every single image was just
     # noise. The frontend (finalizeBubble in ai.html) knows not to fall
@@ -3846,9 +3843,14 @@ def _ai_chat_send(request):
     # Retry / Edit of an earlier message: the attachment it had carries over
     # unless a new one was supplied, since the page never re-uploads it.
     replace_target = _ai_replace_target(request, payload)
+    stored_image = ''   # what the new message row keeps when it reuses a stored picture
     if replace_target is not None and not image_data and not document_text:
         if replace_target.image_data:
-            image_data = replace_target.image_data
+            stored_image = replace_target.image_data
+            # The model and the image tools need the bytes, not a file link.
+            image_data = _snapshot_ai_report_image(stored_image)
+            if not image_data.startswith('data:image/'):
+                image_data = ''
             image_ocr_text = replace_target.document_text
         elif replace_target.document_name and replace_target.document_text:
             document_text = replace_target.document_text
@@ -4191,10 +4193,12 @@ def _ai_chat_send(request):
     request._ai_replace_from_pk = None
     user_message = AIMessage.objects.create(
         conversation=conversation, role=AIMessage.ROLE_USER, content=message,
-        image_data=image_data, document_name=document_name,
+        image_data=stored_image or image_data, document_name=document_name,
         document_text=document_text or image_ocr_text,
         reply_to_text=_ai_reply_quote(payload),
     )
+    if user_message.image_data.startswith('data:image/'):
+        _ai_store_attachment_later(user_message.pk, image_data)
     request._ai_user_message_id = user_message.pk
     conversation.updated_at = timezone.now()
     conversation.save(update_fields=['updated_at'])
@@ -4312,7 +4316,8 @@ def _ai_chat_send(request):
             ocr_note = f"\n\nLocally detected text:\n{m['document_text']}" if m['document_text'] else ''
             content = [
                 {'type': 'text', 'text': (m['content'] or 'Describe and analyse this image.') + ocr_note},
-                {'type': 'image_url', 'image_url': {'url': m['image_data']}},
+                # The bytes from this request: the row may already point at Dropbox.
+                {'type': 'image_url', 'image_url': {'url': image_data or m['image_data']}},
             ]
         elif m['image_data'] and m['role'] == AIMessage.ROLE_ASSISTANT:
             # This is a generated media URL, not a new user attachment.
@@ -5400,7 +5405,7 @@ def ai_transcribe_audio(request):
 
 def _cleanup_youtube_downloads():
     expired = list(YouTubeDownloadJob.objects.filter(expires_at__lt=timezone.now()))
-    media_root = Path(settings.MEDIA_ROOT).resolve()
+    media_root = Path(settings.PRIVATE_FILES_ROOT).resolve()
     for job in expired:
         for relative in (job.video_path, job.audio_path):
             if not relative:
@@ -5470,7 +5475,7 @@ def ai_youtube_file(request, token, file_kind):
     if not job or job.status != YouTubeDownloadJob.STATUS_READY or job.expires_at <= timezone.now():
         return JsonResponse({'status': 'error', 'detail': 'Download unavailable or expired.'}, status=404)
     relative = job.video_path if file_kind == 'video' else job.audio_path if file_kind == 'audio' else ''
-    media_root = Path(settings.MEDIA_ROOT).resolve()
+    media_root = Path(settings.PRIVATE_FILES_ROOT).resolve()
     path = (media_root / relative).resolve() if relative else None
     if not path or media_root not in path.parents or not path.is_file():
         return JsonResponse({'status': 'error', 'detail': 'File not found.'}, status=404)
@@ -5764,20 +5769,30 @@ def _is_reportable_unsaved_ai_failure(reply):
 
 
 def _ai_storage_name_from_url(image_value):
-    """Return a safe storage-relative name for one of our media URLs."""
-    if not image_value or image_value.startswith('data:'):
-        return ''
-    image_path = unquote(urlsplit(image_value).path or '')
-    media_path = urlsplit(settings.MEDIA_URL or '/media/').path or '/media/'
-    if not media_path.endswith('/'):
-        media_path += '/'
-    if not image_path.startswith(media_path):
-        return ''
-    storage_name = image_path[len(media_path):].lstrip('/')
-    storage_path = Path(storage_name)
-    if not storage_name or '\\' in storage_name or storage_path.is_absolute() or '..' in storage_path.parts:
-        return ''
-    return storage_name
+    """Return a safe storage-relative name for one of our file URLs (a /media/
+    URL or a stored Dropbox link)."""
+    return dropbox_storage.name_for_url(image_value)
+
+
+def _ai_store_attachment_later(message_id, data_uri):
+    """Moves a picture attached to a chat message out of the database into
+    Dropbox, on a background thread so the reply never waits for it. The row
+    keeps the data: URI until the file is safely stored, then points at it."""
+    match = re.match(r'^data:image/(png|jpe?g|webp|gif);base64,', data_uri[:40], re.I)
+    if not match:
+        return
+
+    def store_ai_attachment():
+        raw = base64.b64decode(data_uri[match.end():])
+        extension = match.group(1).lower().replace('jpeg', 'jpg')
+        name = default_storage.save(
+            f'ai_uploads/{timezone.now():%Y/%m/%d}/{secrets.token_hex(16)}.{extension}', ContentFile(raw),
+        )
+        AIMessage.objects.filter(pk=message_id, image_data__startswith='data:').update(
+            image_data=default_storage.url(name),
+        )
+
+    dropbox_storage.run_later(store_ai_attachment)
 
 
 def _snapshot_ai_report_image(image_value):
