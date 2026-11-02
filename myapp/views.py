@@ -27,7 +27,7 @@ from myapp.forms import (
     ProductForm, ProductImageFormSet, ProductColorFormSet,
     AboutUsContentForm, PolicyPageForm, PaymentSettingsForm, DropboxSettingsForm, PWASettingsForm,
     FeeSettingsForm, AddUserForm, NavAISettingsForm, FounderSectionForm, HeroSlideImageFormSet,
-    BlogSettingsForm, BlogGalleryItemFormSet, ProductCardFormSet, SiteStatusForm,
+    BlogSettingsForm, BlogGalleryItemFormSet, ProductCardFormSet,
 )
 from myapp.models import (
     ContactLead, StoreProfile, Cart, CartItem, Category, Order, OrderItem,
@@ -1817,18 +1817,29 @@ def dashboard_fee_settings(request):
 
 @dashboard_staff_required
 def dashboard_site_status(request):
-    """Disable Site: switch EduTrellis AI and/or EduChats off. Visitors then see
-    a "Coming soon" page at the same address (myapp.middleware.SiteSwitchMiddleware)."""
+    """Disabled Sites: one button each to switch EduTrellis AI or EduChats off
+    (or back on). Visitors then see a "Coming soon" page at the same address
+    (myapp.middleware.SiteSwitchMiddleware)."""
     settings_obj = SiteStatus.get_solo()
-    form = SiteStatusForm(request.POST or None, instance=settings_obj)
-    saved = False
-    if request.method == 'POST' and form.is_valid():
-        form.save()
-        SiteSwitchMiddleware.refresh()
-        saved = True
-        form = SiteStatusForm(instance=settings_obj)
+    changed = ''
+    if request.method == 'POST':
+        field = {'ai': 'ai_disabled', 'educhats': 'educhats_disabled'}.get(request.POST.get('product'))
+        action = request.POST.get('action')
+        if field and action in ('disable', 'enable'):
+            setattr(settings_obj, field, action == 'disable')
+            settings_obj.save(update_fields=[field, 'updated_at'])
+            SiteSwitchMiddleware.refresh()
+            changed = request.POST['product']
+    sites = [
+        {'key': 'ai', 'name': 'EduTrellis AI', 'icon': 'fa-robot', 'path': '/ai/',
+         'disabled': settings_obj.ai_disabled,
+         'about': 'The AI chat, its API and its installable app.'},
+        {'key': 'educhats', 'name': 'EduChats', 'icon': 'fa-comments', 'path': '/educhats/',
+         'disabled': settings_obj.educhats_disabled,
+         'about': 'Chats, calls and groups. While off, it uses no memory on the server.'},
+    ]
     return render(request, 'dashboard/site_status.html', {
-        'active': 'site_status', 'form': form, 'settings_obj': settings_obj, 'saved': saved,
+        'active': 'site_status', 'sites': sites, 'changed': changed,
     })
 
 

@@ -233,14 +233,20 @@ class SiteSwitchTests(TestCase):
         staff = User.objects.create_user(username='admin@example.com', password='pw-123456789', is_staff=True)
         self.client.force_login(staff)
         self._switch(ai_disabled=False, educhats_disabled=False)
-        response = self.client.post('/store/dashboard/site-status/', {'educhats_disabled': 'on'})
-        self.assertContains(response, 'Saved.')
+        response = self.client.post('/store/dashboard/site-status/', {'product': 'educhats', 'action': 'disable'})
+        self.assertContains(response, 'EduChats is now disabled.')
+        self.assertContains(response, 'Enable EduChats')
+        self.assertContains(response, 'Disable EduTrellis AI')
         self.assertTrue(SiteStatus.get_solo().educhats_disabled)
         self.assertFalse(SiteStatus.get_solo().ai_disabled)
         self.assertEqual(self.client.get('/educhats/').status_code, 503)
 
+        self.client.post('/store/dashboard/site-status/', {'product': 'educhats', 'action': 'enable'})
+        self.assertFalse(SiteStatus.get_solo().educhats_disabled)
+        self.assertNotEqual(self.client.get('/educhats/').status_code, 503)
+
     def test_dashboard_page_is_staff_only(self):
-        response = self.client.post('/store/dashboard/site-status/', {'ai_disabled': 'on'})
+        response = self.client.post('/store/dashboard/site-status/', {'product': 'ai', 'action': 'disable'})
         self.assertEqual(response.status_code, 302)
         self.assertFalse(SiteStatus.objects.filter(ai_disabled=True).exists())
 

@@ -1,52 +1,54 @@
 {% extends "dashboard/base.html" %}
-{% block title %}Disable Site{% endblock %}
-{% block page_title %}Disable Site{% endblock %}
+{% block title %}Disabled Sites{% endblock %}
+{% block page_title %}Disabled Sites{% endblock %}
 
 {% block content %}
 <style>
-.switch-row{display:flex;align-items:flex-start;gap:.8rem;padding:1rem 0;border-bottom:1px solid var(--line, #e7eaf0)}
-.switch-row:last-of-type{border-bottom:none}
-.switch-row input[type=checkbox]{width:20px;height:20px;margin-top:.2rem;accent-color:var(--red);flex:none}
-.switch-row label{font-weight:700;color:var(--head, #111418);cursor:pointer}
-.switch-row .help{margin-top:.2rem}
-.state-pill{display:inline-block;margin-left:.45rem;font-size:.7rem;font-weight:800;padding:.1rem .55rem;border-radius:50px;vertical-align:middle}
+.site-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.2rem;max-width:860px}
+.site-card{background:#fff;border:1px solid var(--line, #e7eaf0);border-radius:18px;padding:1.4rem;display:flex;flex-direction:column;gap:.9rem}
+.site-card.off{border-color:rgba(232,0,30,.35);box-shadow:0 10px 26px rgba(232,0,30,.08)}
+.site-head{display:flex;align-items:center;gap:.8rem}
+.site-icon{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;font-size:1.2rem;background:rgba(232,0,30,.1);color:var(--red)}
+.site-name{font-weight:800;font-size:1.05rem;color:var(--head, #111418)}
+.site-path{font-size:.8rem;color:var(--text)}
+.state-pill{margin-left:auto;font-size:.72rem;font-weight:800;padding:.2rem .65rem;border-radius:50px;white-space:nowrap}
 .state-pill.live{background:rgba(22,163,74,.12);color:#15803d}
 .state-pill.off{background:rgba(232,0,30,.12);color:var(--red)}
+.site-about{font-size:.86rem;color:var(--text);margin:0}
+.site-card form{margin-top:auto}
+.site-card .btn{width:100%;justify-content:center}
+.btn-enable{background:#15803d;color:#fff;border:none}
+.btn-enable:hover{background:#166534}
 </style>
 
-<p class="backup-sub" style="color:var(--text);font-size:.88rem;margin:0 0 1.4rem">
-  Switch a product off for everyone. Its pages keep their normal address (for example <code>/ai/</code> or
-  <code>/educhats/</code>) but show a "Coming soon" page instead. Nothing is deleted, and the storefront,
-  this dashboard and <code>/admin/</code> keep working. Untick a box and save to turn the product back on.
+<p class="backup-sub" style="color:var(--text);font-size:.88rem;margin:0 0 1.4rem;max-width:860px">
+  Turn a product off for everyone with one click. Its pages keep their normal address but show a "Coming soon"
+  page instead. Nothing is deleted, and the storefront, this dashboard and <code>/admin/</code> keep working.
 </p>
 
-{% if saved %}<div class="save-msg"><i class="fas fa-circle-check"></i> Saved. Visitors see the change within a few seconds.</div>{% endif %}
-
-<form class="form-card" style="max-width:620px" method="post">
-  {% csrf_token %}
-
-  <div class="switch-row">
-    {{ form.ai_disabled }}
-    <div>
-      <label for="{{ form.ai_disabled.id_for_label }}">Disable EduTrellis AI</label>
-      {% if settings_obj.ai_disabled %}<span class="state-pill off">Coming soon</span>{% else %}<span class="state-pill live">Live</span>{% endif %}
-      <div class="help">Every page under <code>/ai/</code> (chat, API, app install) shows "Coming soon".</div>
-      {{ form.ai_disabled.errors }}
+<div class="site-grid">
+  {% for site in sites %}
+  <div class="site-card{% if site.disabled %} off{% endif %}">
+    <div class="site-head">
+      <div class="site-icon"><i class="fas {{ site.icon }}"></i></div>
+      <div>
+        <div class="site-name">{{ site.name }}</div>
+        <div class="site-path">{{ site.path }}</div>
+      </div>
+      {% if site.disabled %}<span class="state-pill off">Coming soon</span>{% else %}<span class="state-pill live">Live</span>{% endif %}
     </div>
+    <p class="site-about">{{ site.about }}</p>
+    {% if changed == site.key %}<div class="save-msg" style="margin:0"><i class="fas fa-circle-check"></i> {{ site.name }} is now {% if site.disabled %}disabled{% else %}live again{% endif %}.</div>{% endif %}
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="product" value="{{ site.key }}">
+      {% if site.disabled %}
+        <button type="submit" name="action" value="enable" class="btn btn-enable"><i class="fas fa-power-off"></i> Enable {{ site.name }}</button>
+      {% else %}
+        <button type="submit" name="action" value="disable" class="btn btn-primary" onclick="return confirm('Disable {{ site.name }}? Visitors will see a Coming soon page.')"><i class="fas fa-ban"></i> Disable {{ site.name }}</button>
+      {% endif %}
+    </form>
   </div>
-
-  <div class="switch-row">
-    {{ form.educhats_disabled }}
-    <div>
-      <label for="{{ form.educhats_disabled.id_for_label }}">Disable EduChats</label>
-      {% if settings_obj.educhats_disabled %}<span class="state-pill off">Coming soon</span>{% else %}<span class="state-pill live">Live</span>{% endif %}
-      <div class="help">Every page under <code>/educhats/</code> shows "Coming soon", and chats, calls and message checks stop running on the server, which frees its memory.</div>
-      {{ form.educhats_disabled.errors }}
-    </div>
-  </div>
-
-  <div class="form-actions">
-    <button type="submit" class="btn btn-primary"><i class="fas fa-check"></i> Save</button>
-  </div>
-</form>
+  {% endfor %}
+</div>
 {% endblock %}
